@@ -1,0 +1,366 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>OCR 识别工具</title>
+  <style>
+    :root {
+      --bg: #f3f0e8;
+      --panel: rgba(255, 252, 245, 0.9);
+      --line: #d7c8af;
+      --text: #2d261d;
+      --accent: #1f6f5f;
+      --accent-2: #bf5b04;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "Noto Sans SC", "PingFang SC", sans-serif;
+      color: var(--text);
+      background:
+        radial-gradient(circle at top left, rgba(31,111,95,0.16), transparent 32%),
+        linear-gradient(135deg, #f7f4ee, var(--bg));
+    }
+    .shell {
+      max-width: 1380px;
+      margin: 0 auto;
+      padding: 24px;
+    }
+    .hero {
+      display: flex;
+      justify-content: space-between;
+      align-items: end;
+      gap: 16px;
+      margin-bottom: 20px;
+    }
+    .hero h1 {
+      margin: 0;
+      font-size: 32px;
+      font-weight: 800;
+    }
+    .hero p {
+      margin: 8px 0 0;
+      color: #5f5649;
+    }
+    .status-pill {
+      padding: 10px 14px;
+      border-radius: 999px;
+      background: #fff;
+      border: 1px solid var(--line);
+      font-size: 14px;
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: 1.2fr 0.9fr;
+      gap: 20px;
+    }
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 22px;
+      box-shadow: 0 18px 45px rgba(77, 57, 27, 0.08);
+      backdrop-filter: blur(10px);
+    }
+    .video-panel {
+      padding: 16px;
+    }
+    .video-wrap {
+      overflow: hidden;
+      border-radius: 18px;
+      border: 1px solid #c8b79a;
+      background: #161616;
+      aspect-ratio: 4 / 3;
+    }
+    .video-wrap img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      display: block;
+    }
+    .controls {
+      display: grid;
+      gap: 14px;
+      padding: 20px;
+    }
+    .row {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 10px;
+      align-items: center;
+    }
+    .field-grid {
+      display: grid;
+      grid-template-columns: 120px 1fr;
+      gap: 10px 14px;
+      align-items: center;
+    }
+    label {
+      font-size: 14px;
+      font-weight: 700;
+    }
+    input, select, button, textarea {
+      font: inherit;
+    }
+    input, select, textarea {
+      width: 100%;
+      padding: 12px 14px;
+      border-radius: 14px;
+      border: 1px solid #ccb99c;
+      background: rgba(255, 255, 255, 0.92);
+      color: var(--text);
+    }
+    button {
+      padding: 12px 16px;
+      border: 0;
+      border-radius: 14px;
+      cursor: pointer;
+      background: var(--accent);
+      color: #fff;
+      font-weight: 700;
+    }
+    button.alt {
+      background: #efe4d3;
+      color: #433729;
+      border: 1px solid #ccb99c;
+    }
+    button:disabled {
+      opacity: 0.6;
+      cursor: wait;
+    }
+    .checkline {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .checkline input {
+      width: auto;
+    }
+    .metrics {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 10px;
+    }
+    .metric {
+      padding: 14px;
+      border-radius: 16px;
+      background: #fff;
+      border: 1px solid var(--line);
+    }
+    .metric .name {
+      display: block;
+      font-size: 13px;
+      color: #776b5e;
+      margin-bottom: 6px;
+    }
+    .metric .value {
+      font-size: 22px;
+      font-weight: 800;
+    }
+    .result-box, .log-box {
+      border-radius: 16px;
+      background: #fff;
+      border: 1px solid var(--line);
+      padding: 14px;
+      min-height: 120px;
+      white-space: pre-wrap;
+    }
+    .log-box {
+      min-height: 260px;
+      max-height: 360px;
+      overflow: auto;
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: 13px;
+    }
+    .footnote {
+      color: #6f6456;
+      font-size: 13px;
+    }
+    @media (max-width: 980px) {
+      .grid {
+        grid-template-columns: 1fr;
+      }
+      .metrics {
+        grid-template-columns: 1fr;
+      }
+      .field-grid {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <div class="hero">
+      <div>
+        <h1>OCR 识别工具</h1>
+        <p>网页模式，复用 RKNN OCR 流程，展示设备、日志、结果和耗时。</p>
+      </div>
+      <div class="status-pill" id="status-pill">服务初始化中</div>
+    </div>
+    <div class="grid">
+      <section class="panel video-panel">
+        <div class="video-wrap">
+          <img src="/video_feed" alt="视频预览">
+        </div>
+      </section>
+      <section class="panel controls">
+        <div class="row">
+          <select id="device-select"></select>
+          <button class="alt" id="refresh-btn">刷新设备</button>
+        </div>
+
+        <div class="field-grid">
+          <label for="sn-input">输入 SN 号</label>
+          <input id="sn-input" placeholder="请输入 SN">
+
+          <label for="vendor-input">前三码</label>
+          <input id="vendor-input" placeholder="前三码" disabled>
+
+          <label for="model-input">后四码</label>
+          <input id="model-input" placeholder="后四码" disabled>
+        </div>
+
+        <label class="checkline">
+          <input type="checkbox" id="vendor-enabled">
+          编辑前三码 / 后四码
+        </label>
+
+        <div class="metrics">
+          <div class="metric">
+            <span class="name">下载耗时</span>
+            <span class="value" id="download-cost">-</span>
+          </div>
+          <div class="metric">
+            <span class="name">识别耗时</span>
+            <span class="value" id="detect-cost">-</span>
+          </div>
+          <div class="metric">
+            <span class="name">上传耗时</span>
+            <span class="value" id="upload-cost">-</span>
+          </div>
+        </div>
+
+        <div>
+          <label>识别结果</label>
+          <div class="result-box" id="result-box">等待检测</div>
+        </div>
+
+        <div>
+          <label>日志输出</label>
+          <div class="log-box" id="log-box"></div>
+        </div>
+
+        <button id="detect-btn">开始检测</button>
+        <div class="footnote">如果摄像头被其他进程占用，日志会直接显示错误原因。</div>
+      </section>
+    </div>
+  </div>
+
+  <script>
+    const statusPill = document.getElementById("status-pill");
+    const deviceSelect = document.getElementById("device-select");
+    const refreshBtn = document.getElementById("refresh-btn");
+    const detectBtn = document.getElementById("detect-btn");
+    const vendorEnabled = document.getElementById("vendor-enabled");
+    const vendorInput = document.getElementById("vendor-input");
+    const modelInput = document.getElementById("model-input");
+    const resultBox = document.getElementById("result-box");
+    const logBox = document.getElementById("log-box");
+
+    function costText(value) {
+      return value == null ? "-" : `${value.toFixed(3)}s`;
+    }
+
+    function updateDeviceOptions(devices, selectedDevice) {
+      const previous = deviceSelect.value;
+      deviceSelect.innerHTML = "";
+      if (!devices.length) {
+        const option = document.createElement("option");
+        option.value = "";
+        option.textContent = "无可用设备";
+        deviceSelect.appendChild(option);
+        deviceSelect.disabled = true;
+        return;
+      }
+
+      deviceSelect.disabled = false;
+      devices.forEach((device) => {
+        const option = document.createElement("option");
+        option.value = device;
+        option.textContent = device;
+        deviceSelect.appendChild(option);
+      });
+      deviceSelect.value = selectedDevice || previous || devices[0];
+    }
+
+    function renderState(data) {
+      statusPill.textContent = data.detecting ? "检测进行中" : "服务运行中";
+      detectBtn.disabled = data.detecting;
+      refreshBtn.disabled = data.detecting;
+      resultBox.textContent = data.result_text || "等待检测";
+      document.getElementById("download-cost").textContent = costText(data.time_info.download);
+      document.getElementById("detect-cost").textContent = costText(data.time_info.detect);
+      document.getElementById("upload-cost").textContent = costText(data.time_info.upload);
+      updateDeviceOptions(data.devices, data.selected_device);
+      logBox.textContent = data.logs.join("\n");
+      logBox.scrollTop = logBox.scrollHeight;
+    }
+
+    async function fetchStatus() {
+      const response = await fetch("/api/status");
+      const data = await response.json();
+      renderState(data);
+    }
+
+    async function refreshDevices() {
+      const response = await fetch("/api/devices");
+      const data = await response.json();
+      updateDeviceOptions(data.devices, data.selected_device);
+      await fetchStatus();
+    }
+
+    async function changeDevice() {
+      await fetch("/api/select-device", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({device: deviceSelect.value})
+      });
+      await fetchStatus();
+    }
+
+    async function detect() {
+      detectBtn.disabled = true;
+      statusPill.textContent = "检测进行中";
+      const response = await fetch("/api/detect", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({
+          sn: document.getElementById("sn-input").value,
+          vendor: vendorInput.value,
+          model: modelInput.value,
+          vendor_enabled: vendorEnabled.checked
+        })
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        resultBox.textContent = "FAIL";
+      }
+      renderState(data.state || data);
+      detectBtn.disabled = false;
+    }
+
+    vendorEnabled.addEventListener("change", () => {
+      vendorInput.disabled = !vendorEnabled.checked;
+      modelInput.disabled = !vendorEnabled.checked;
+    });
+    refreshBtn.addEventListener("click", refreshDevices);
+    detectBtn.addEventListener("click", detect);
+    deviceSelect.addEventListener("change", changeDevice);
+
+    refreshDevices();
+    fetchStatus();
+    setInterval(fetchStatus, 1500);
+  </script>
+</body>
+</html>

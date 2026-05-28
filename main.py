@@ -1,23 +1,23 @@
 import csv
+import fcntl
 import glob
 import os
+import re
 import subprocess
 import threading
 import time
+from collections import deque
 from datetime import datetime
-import re
 
 import cv2
-import gi
-import numpy as np
-
-gi.require_version("GdkPixbuf", "2.0")
-gi.require_version("Gtk", "3.0")
-from gi.repository import GdkPixbuf, GLib, Gtk
+from flask import Flask, Response, jsonify, render_template, request
 
 
-save_dir = os.path.expanduser("~/ocr")
-os.makedirs(save_dir, exist_ok=True)
+APP_HOST = os.environ.get("OCR_WEB_HOST", "0.0.0.0")
+APP_PORT = int(os.environ.get("OCR_WEB_PORT", "5000"))
+LOCK_PATH = os.path.expanduser("~/.cache/ocr_web.lock")
+SAVE_DIR = os.path.expanduser("~/ocr")
+os.makedirs(SAVE_DIR, exist_ok=True)
 
 
 def extract_video_index(device):
@@ -38,427 +38,371 @@ def get_video_devices():
     return sorted(all_devices, key=extract_video_index)
 
 
-class OCRApp:
+class AppState:
     def __init__(self):
-        self.cap = None
+        self.lock = threading.Lock()
+        self.logs = deque(maxlen=400)
+        self.result_text = ""
+        self.time_info = {"download": None, "detect": None, "upload": None}
+        self.detecting = False
+        self.selected_device = None
         self.devices = []
-        self.current_frame = None
-        self.is_detecting = False
-        self.placeholder_pixbuf = self.create_black_pixbuf()
-        self.latest_frame_bytes = None
+        self.last_detection = None
+        self.last_error = None
 
-        self.window = Gtk.Window(title="OCR 识别工具")
-        self.window.set_default_size(1200, 750)
-        self.window.set_border_width(12)
-        self.window.connect("destroy", self.on_close)
-
-        self.build_ui()
-        self.refresh_device_list(initial=True)
-
-        GLib.timeout_add(33, self.update_video)
-        for delay in (200, 1000, 3000):
-            GLib.timeout_add(delay, self.present_window)
-
-    def build_ui(self):
-        root_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
-        self.window.add(root_box)
-
-        left_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
-        root_box.pack_start(left_box, True, True, 0)
-
-        self.video_image = Gtk.Image()
-        self.video_image.set_from_pixbuf(self.placeholder_pixbuf)
-        video_frame = Gtk.Frame()
-        video_frame.add(self.video_image)
-        left_box.pack_start(video_frame, True, True, 0)
-
-        right_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
-        right_box.set_size_request(420, -1)
-        root_box.pack_start(right_box, False, False, 0)
-
-        device_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-        right_box.pack_start(device_row, False, False, 0)
-
-        self.device_combo = Gtk.ComboBoxText()
-        self.device_combo.connect("changed", self.on_device_change)
-        device_row.pack_start(self.device_combo, True, True, 0)
-
-        refresh_button = Gtk.Button(label="刷新设备")
-        refresh_button.connect("clicked", self.on_refresh_clicked)
-        device_row.pack_start(refresh_button, False, False, 0)
-
-        form_grid = Gtk.Grid(column_spacing=8, row_spacing=8)
-        right_box.pack_start(form_grid, False, False, 0)
-
-        sn_label = Gtk.Label(label="输入 SN 号:")
-        sn_label.set_xalign(0)
-        form_grid.attach(sn_label, 0, 0, 1, 1)
-        self.sn_entry = Gtk.Entry()
-        form_grid.attach(self.sn_entry, 1, 0, 2, 1)
-
-        vendor_label = Gtk.Label(label="前三码:")
-        vendor_label.set_xalign(0)
-        form_grid.attach(vendor_label, 0, 1, 1, 1)
-        self.vendor_entry = Gtk.Entry()
-        self.vendor_entry.set_sensitive(False)
-        form_grid.attach(self.vendor_entry, 1, 1, 1, 1)
-
-        model_label = Gtk.Label(label="后四码:")
-        model_label.set_xalign(0)
-        form_grid.attach(model_label, 0, 2, 1, 1)
-        self.model_entry = Gtk.Entry()
-        self.model_entry.set_sensitive(False)
-        form_grid.attach(self.model_entry, 1, 2, 1, 1)
-
-        self.vendor_check = Gtk.CheckButton(label="编辑前三码/后四码")
-        self.vendor_check.connect("toggled", self.on_vendor_toggled)
-        form_grid.attach(self.vendor_check, 2, 1, 1, 2)
-
-        result_label = Gtk.Label(label="识别结果:")
-        result_label.set_xalign(0)
-        right_box.pack_start(result_label, False, False, 0)
-
-        self.result_view = self.create_text_view(height=120)
-        right_box.pack_start(self.result_view["scrolled"], False, False, 0)
-
-        self.time_info_label = Gtk.Label(label="下载: - | 识别: - | 上传: -")
-        self.time_info_label.set_xalign(0)
-        right_box.pack_start(self.time_info_label, False, False, 0)
-
-        log_label = Gtk.Label(label="日志输出:")
-        log_label.set_xalign(0)
-        right_box.pack_start(log_label, False, False, 0)
-
-        self.log_view = self.create_text_view(height=220)
-        right_box.pack_start(self.log_view["scrolled"], True, True, 0)
-
-        self.start_button = Gtk.Button(label="开始检测")
-        self.start_button.set_size_request(-1, 48)
-        self.start_button.connect("clicked", self.on_start_clicked)
-        right_box.pack_start(self.start_button, False, False, 0)
-
-    def create_text_view(self, height):
-        text_view = Gtk.TextView()
-        text_view.set_wrap_mode(Gtk.WrapMode.WORD_CHAR)
-        text_view.set_editable(False)
-        text_view.set_cursor_visible(False)
-
-        scrolled = Gtk.ScrolledWindow()
-        scrolled.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
-        scrolled.set_size_request(-1, height)
-        scrolled.add(text_view)
-        return {"view": text_view, "buffer": text_view.get_buffer(), "scrolled": scrolled}
-
-    def create_black_pixbuf(self):
-        black_image = np.zeros((480, 640, 3), dtype=np.uint8)
-        return self.frame_to_pixbuf(black_image)
-
-    def frame_to_pixbuf(self, frame):
-        if frame.shape[:2] != (480, 640):
-            frame = cv2.resize(frame, (640, 480))
-        if frame.ndim != 3 or frame.shape[2] != 3:
-            return None
-        frame = np.ascontiguousarray(frame)
-        self.latest_frame_bytes = GLib.Bytes.new(frame.tobytes())
-        return GdkPixbuf.Pixbuf.new_from_bytes(
-            self.latest_frame_bytes,
-            GdkPixbuf.Colorspace.RGB,
-            False,
-            8,
-            frame.shape[1],
-            frame.shape[0],
-            frame.shape[1] * 3,
-        )
-
-    def present_window(self):
-        self.window.show_all()
-        self.window.deiconify()
-        self.window.present()
-        return False
-
-    def set_text_buffer(self, buffer_wrapper, text):
-        buffer_wrapper["buffer"].set_text(text)
-        mark = buffer_wrapper["buffer"].get_insert()
-        buffer_wrapper["view"].scroll_mark_onscreen(mark)
-
-    def append_text_buffer(self, buffer_wrapper, text):
-        buffer_obj = buffer_wrapper["buffer"]
-        end_iter = buffer_obj.get_end_iter()
-        buffer_obj.insert(end_iter, text)
-        mark = buffer_obj.get_insert()
-        buffer_wrapper["view"].scroll_mark_onscreen(mark)
-
-    def set_result_text(self, text):
-        self.set_text_buffer(self.result_view, text)
-
-    def append_log(self, text):
-        self.append_text_buffer(self.log_view, text)
-
-    def log_with_time(self, text):
+    def append_log(self, message):
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        GLib.idle_add(self.append_log, f"[{timestamp}] {text}\n")
+        with self.lock:
+            self.logs.append(f"[{timestamp}] {message}")
 
-    def set_time_info(self, download_cost=None, detect_cost=None, upload_cost=None):
-        def format_cost(value):
-            if value is None:
-                return "-"
-            return f"{value:.3f}s"
+    def set_result(self, text):
+        with self.lock:
+            self.result_text = text
 
-        self.time_info_label.set_text(
-            f"下载: {format_cost(download_cost)} | 识别: {format_cost(detect_cost)} | 上传: {format_cost(upload_cost)}"
-        )
+    def set_time_info(self, download=None, detect=None, upload=None):
+        with self.lock:
+            self.time_info = {"download": download, "detect": detect, "upload": upload}
 
-    def set_busy_state(self, busy):
-        self.is_detecting = busy
-        self.start_button.set_sensitive(not busy)
-        self.device_combo.set_sensitive(not busy)
+    def set_devices(self, devices, selected_device):
+        with self.lock:
+            self.devices = devices
+            self.selected_device = selected_device
 
-    def upload_log(self, local_file_path, oss_path):
-        started_at = time.perf_counter()
-        try:
-            command = f"ossutil cp -f {local_file_path} {oss_path}"
-            result = subprocess.run(
-                command,
-                shell=True,
-                check=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-            )
-            print("Upload successful:", result.stdout)
-            elapsed = time.perf_counter() - started_at
-            GLib.idle_add(self.start_progress)
-            GLib.idle_add(self.set_result_text, " PASS")
-            self.log_with_time(f"上传日志完成，耗时 {elapsed:.3f}s")
-            return elapsed
-        except subprocess.CalledProcessError as exc:
-            print("Error during upload:", exc.stderr)
-            elapsed = time.perf_counter() - started_at
-            GLib.idle_add(self.start_progress)
-            GLib.idle_add(self.set_result_text, " FAIL")
-            self.log_with_time(f"上传日志失败，耗时 {elapsed:.3f}s")
-            return elapsed
+    def snapshot(self):
+        with self.lock:
+            return {
+                "logs": list(self.logs),
+                "result_text": self.result_text,
+                "time_info": dict(self.time_info),
+                "detecting": self.detecting,
+                "selected_device": self.selected_device,
+                "devices": list(self.devices),
+                "last_detection": self.last_detection,
+                "last_error": self.last_error,
+            }
 
-    def download_log(self, oss_path, local_file_path):
-        started_at = time.perf_counter()
-        try:
-            command = f"ossutil cp -f {oss_path} {local_file_path}"
-            result = subprocess.run(
-                command,
-                shell=True,
-                check=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-            )
-            print("Download successful:", result.stdout)
-            elapsed = time.perf_counter() - started_at
-            self.log_with_time(f"下载日志完成，耗时 {elapsed:.3f}s")
-            return elapsed
-        except subprocess.CalledProcessError as exc:
-            print("Error during download:", exc.stderr)
-            elapsed = time.perf_counter() - started_at
-            self.log_with_time(f"下载日志失败，耗时 {elapsed:.3f}s")
-            return elapsed
 
-    def update_progress_bar(self, progress):
-        max_progress = 10
-        bar_length = int(progress * max_progress / 100)
-        progress_bar = "#" * bar_length + "-" * (max_progress - bar_length)
-        self.set_result_text(f"进度: [{progress_bar}] {progress}%")
+class CameraManager:
+    def __init__(self, state):
+        self.state = state
+        self.lock = threading.Lock()
+        self.cap = None
+        self.current_frame = None
+        self.current_device = None
+        self.stop_event = threading.Event()
+        self.worker = threading.Thread(target=self.capture_loop, daemon=True)
+        self.worker.start()
 
-    def start_progress(self):
-        while Gtk.events_pending():
-            Gtk.main_iteration_do(False)
-        for progress in range(0, 101, 50):
-            self.update_progress_bar(progress)
-            time.sleep(0.01)
-            while Gtk.events_pending():
-                Gtk.main_iteration_do(False)
-
-    def on_refresh_clicked(self, _button):
-        self.refresh_device_list()
-
-    def refresh_device_list(self, initial=False):
-        current_devices = get_video_devices()
-        if not initial and current_devices == self.devices:
-            return
-
-        previous_device = self.device_combo.get_active_text()
-        self.devices = current_devices
-        self.device_combo.remove_all()
-
-        if self.devices:
-            for device in self.devices:
-                self.device_combo.append_text(device)
-            if previous_device in self.devices:
-                self.device_combo.set_active(self.devices.index(previous_device))
-            else:
-                self.device_combo.set_active(0)
-                self.append_log(f"设备已切换到: {self.devices[0]}\n")
-        else:
-            self.device_combo.append_text("无可用设备")
-            self.device_combo.set_active(0)
-            self.append_log("没有检测到可用设备！\n")
-
-    def on_device_change(self, combo):
-        device = combo.get_active_text()
-        if not device or device == "无可用设备":
-            if self.cap:
-                self.cap.release()
-                self.cap = None
-            return
-
-        if self.init_camera(device):
-            self.append_log(f"已切换到设备: {device}\n")
-        else:
-            self.append_log(f"无法打开设备: {device}\n")
-
-    def on_vendor_toggled(self, button):
-        editable = button.get_active()
-        self.vendor_entry.set_sensitive(editable)
-        self.model_entry.set_sensitive(editable)
-
-    def init_camera(self, device):
-        if self.cap:
-            self.cap.release()
-        self.cap = cv2.VideoCapture(device)
-        if not self.cap.isOpened():
-            self.cap = None
-            return None
-        return self.cap
-
-    def update_video(self):
-        frame = None
-        if self.cap and self.cap.isOpened():
-            ret, frame = self.cap.read()
-            if ret:
-                self.current_frame = frame.copy()
-                frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                pixbuf = self.frame_to_pixbuf(frame_rgb)
-                if pixbuf is not None:
-                    self.video_image.set_from_pixbuf(pixbuf)
-            else:
+    def open_device(self, device):
+        with self.lock:
+            self._release_locked()
+            if not device:
+                self.current_device = None
                 self.current_frame = None
-        if frame is None:
-            self.video_image.set_from_pixbuf(self.placeholder_pixbuf)
-        return True
+                return False
 
-    def on_start_clicked(self, _button):
-        if self.is_detecting:
-            return
-        self.set_busy_state(True)
-        self.set_result_text("处理中...")
-        self.set_time_info()
-        frame_snapshot = None if self.current_frame is None else self.current_frame.copy()
-        form_data = {
-            "sn": self.sn_entry.get_text().strip(),
-            "vendor": self.vendor_entry.get_text().strip(),
-            "model": self.model_entry.get_text().strip(),
-            "vendor_enabled": self.vendor_check.get_active(),
-            "frame": frame_snapshot,
-        }
-        worker = threading.Thread(target=self.start_detection, args=(form_data,), daemon=True)
-        worker.start()
+            open_targets = []
+            match = re.fullmatch(r"/dev/video(\d+)", device)
+            if match:
+                open_targets.append((int(match.group(1)), cv2.CAP_V4L2))
+            open_targets.append((device, cv2.CAP_V4L2))
+            open_targets.append((device, cv2.CAP_ANY))
 
-    def start_detection(self, form_data):
-        try:
-            GLib.idle_add(self.vendor_check.set_active, False)
-            download_cost = self.download_log("oss://az05/checkCpu/results.csv", "results.csv")
-
-            frame = form_data["frame"]
-            if frame is None:
-                self.log_with_time("摄像头未打开，请先选择设备！")
-                GLib.idle_add(self.set_result_text, " FAIL")
-                return
-
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            sn = form_data["sn"]
-            vendor = form_data["vendor"]
-            model = form_data["model"]
-            vendor_enabled = form_data["vendor_enabled"]
-
-            GLib.idle_add(self.sn_entry.set_text, "")
-            GLib.idle_add(self.sn_entry.grab_focus)
-
-            if not sn or (vendor_enabled and (not vendor or not model)):
-                self.log_with_time("输入项不能为空，请检查输入！")
-                GLib.idle_add(self.set_result_text, " FAIL")
-                return
-
-            photo_path = os.path.join(save_dir, f"{sn}_{timestamp}.jpg")
-            cv2.imwrite(photo_path, frame)
-            self.log_with_time(f"照片已保存到: {photo_path}")
-
-            command = ["./rknn_ppocr_system_demo", "model/ppocrv4_det.rknn", "model/ppocrv4_rec.rknn", photo_path]
-            detect_started_at = time.perf_counter()
-            result = subprocess.run(command, capture_output=True, text=True, check=True)
-            detect_cost = time.perf_counter() - detect_started_at
-            self.log_with_time(f"识别完成，耗时 {detect_cost:.3f}s")
-            GLib.idle_add(self.append_log, f"检测结果:\n{result.stdout}\n")
-
-            results = []
-            upload_cost = None
-            if os.path.exists(photo_path):
-                os.remove(photo_path)
-                self.log_with_time(f"已删除图片: {photo_path}")
-
-            if not os.path.exists("text.txt"):
-                self.log_with_time("检测失败：未生成 text.txt。")
-                GLib.idle_add(self.set_time_info, download_cost, detect_cost, upload_cost)
-                return
-
-            with open("text.txt", "r", encoding="utf-8", errors="ignore") as file_obj:
-                lines = file_obj.readlines()
-
-            for index, line in enumerate(lines):
-                if "RK3288" not in line:
+            for target, backend in open_targets:
+                cap = cv2.VideoCapture(target, backend)
+                if not cap.isOpened():
+                    cap.release()
                     continue
-                if index + 1 >= len(lines):
-                    break
+                cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+                cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+                cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+                cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"YUYV"))
+                self.cap = cap
+                self.current_device = device
+                self.current_frame = None
+                self.state.append_log(f"已切换到设备: {device}")
+                return True
 
-                next_line = "".join(lines[index + 1].split())
-                if vendor and model and (next_line[:3] != vendor or next_line[-4:] != model):
-                    self.log_with_time("检测失败：OCR 结果中，'RK3288' 下一行字符与输入不匹配。")
-                    GLib.idle_add(self.start_progress)
-                    GLib.idle_add(self.set_result_text, " FAIL")
-                    GLib.idle_add(self.set_time_info, download_cost, detect_cost, upload_cost)
-                    return
+            self.current_device = None
+            self.current_frame = None
+            self.state.append_log(f"无法打开设备: {device}，可能已被其他进程占用。")
+            return False
 
-                results.append([sn, next_line, vendor, model, timestamp])
-                file_exists = os.path.exists("results.csv")
-                with open("results.csv", "a", newline="", encoding="utf-8") as csv_file:
-                    writer = csv.writer(csv_file)
-                    if not file_exists:
-                        writer.writerow(["SN号", "content", "Vendor", "Model", "date"])
-                    writer.writerows(results)
-
-                self.log_with_time("CSV 文件已保存到本地: results.csv")
-                upload_cost = self.upload_log("results.csv", "oss://az05/checkCpu/")
-                GLib.idle_add(self.set_time_info, download_cost, detect_cost, upload_cost)
-                return
-
-            self.log_with_time("检测失败：OCR 结果中未找到 'RK3288'。")
-            GLib.idle_add(self.start_progress)
-            GLib.idle_add(self.set_result_text, " FAIL")
-            GLib.idle_add(self.set_time_info, download_cost, detect_cost, upload_cost)
-        except subprocess.CalledProcessError as exc:
-            self.log_with_time(f"检测失败: {exc.stderr.strip()}")
-            GLib.idle_add(self.set_result_text, " FAIL")
-        finally:
-            GLib.idle_add(self.set_busy_state, False)
-
-    def on_close(self, *_args):
+    def _release_locked(self):
         if self.cap:
             self.cap.release()
             self.cap = None
-        Gtk.main_quit()
+
+    def release(self):
+        with self.lock:
+            self._release_locked()
+            self.current_device = None
+            self.current_frame = None
+
+    def capture_loop(self):
+        while not self.stop_event.is_set():
+            with self.lock:
+                cap = self.cap
+            if cap and cap.isOpened():
+                ok, frame = cap.read()
+                if ok:
+                    with self.lock:
+                        self.current_frame = frame.copy()
+                else:
+                    time.sleep(0.05)
+            else:
+                time.sleep(0.1)
+
+    def get_frame_copy(self):
+        with self.lock:
+            if self.current_frame is None:
+                return None
+            return self.current_frame.copy()
+
+    def get_jpeg(self):
+        frame = self.get_frame_copy()
+        if frame is None:
+            frame = self.build_placeholder()
+        ok, encoded = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), 85])
+        if not ok:
+            return b""
+        return encoded.tobytes()
+
+    @staticmethod
+    def build_placeholder():
+        frame = 255 * (cv2.UMat(480, 640, cv2.CV_8UC3).get() * 0)
+        cv2.putText(frame, "Camera Preview", (180, 220), cv2.FONT_HERSHEY_SIMPLEX, 1, (180, 180, 180), 2)
+        cv2.putText(frame, "No frame available", (170, 270), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (140, 140, 140), 2)
+        return frame
+
+
+state = AppState()
+camera = CameraManager(state)
+app = Flask(__name__)
+
+
+def format_elapsed(value):
+    if value is None:
+        return None
+    return round(value, 3)
+
+
+def refresh_devices():
+    devices = get_video_devices()
+    selected = state.snapshot()["selected_device"]
+    if devices:
+        if selected not in devices:
+            selected = devices[0]
+            camera.open_device(selected)
+        elif camera.current_device != selected:
+            camera.open_device(selected)
+    else:
+        selected = None
+        camera.release()
+        state.append_log("没有检测到可用设备！")
+    state.set_devices(devices, selected)
+    return devices, selected
+
+
+def run_command(command):
+    return subprocess.run(command, capture_output=True, text=True, check=True)
+
+
+def download_log(oss_path, local_file_path):
+    started_at = time.perf_counter()
+    try:
+        result = subprocess.run(
+            f"ossutil cp -f {local_file_path} {oss_path}" if False else f"ossutil cp -f {oss_path} {local_file_path}",
+            shell=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=True,
+        )
+        elapsed = time.perf_counter() - started_at
+        state.append_log(f"下载日志完成，耗时 {elapsed:.3f}s")
+        return elapsed, result.stdout
+    except subprocess.CalledProcessError as exc:
+        elapsed = time.perf_counter() - started_at
+        state.append_log(f"下载日志失败，耗时 {elapsed:.3f}s")
+        raise RuntimeError(exc.stderr.strip() or "下载日志失败") from exc
+
+
+def upload_log(local_file_path, oss_path):
+    started_at = time.perf_counter()
+    try:
+        result = subprocess.run(
+            f"ossutil cp -f {local_file_path} {oss_path}",
+            shell=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=True,
+        )
+        elapsed = time.perf_counter() - started_at
+        state.append_log(f"上传日志完成，耗时 {elapsed:.3f}s")
+        return elapsed, result.stdout
+    except subprocess.CalledProcessError as exc:
+        elapsed = time.perf_counter() - started_at
+        state.append_log(f"上传日志失败，耗时 {elapsed:.3f}s")
+        raise RuntimeError(exc.stderr.strip() or "上传日志失败") from exc
+
+
+def perform_detection(sn, vendor, model, vendor_enabled):
+    frame = camera.get_frame_copy()
+    if frame is None:
+        raise RuntimeError("摄像头未打开或当前没有有效画面。")
+
+    download_cost, _ = download_log("oss://az05/checkCpu/results.csv", "results.csv")
+    state.set_time_info(download=download_cost, detect=None, upload=None)
+
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    photo_path = os.path.join(SAVE_DIR, f"{sn}_{timestamp}.jpg")
+    cv2.imwrite(photo_path, frame)
+    state.append_log(f"照片已保存到: {photo_path}")
+
+    detect_started_at = time.perf_counter()
+    try:
+        result = run_command(["./rknn_ppocr_system_demo", "model/ppocrv4_det.rknn", "model/ppocrv4_rec.rknn", photo_path])
+    finally:
+        if os.path.exists(photo_path):
+            os.remove(photo_path)
+            state.append_log(f"已删除图片: {photo_path}")
+    detect_cost = time.perf_counter() - detect_started_at
+    state.append_log(f"识别完成，耗时 {detect_cost:.3f}s")
+    state.append_log("检测结果:\n" + result.stdout.strip())
+
+    if not os.path.exists("text.txt"):
+        state.set_time_info(download=download_cost, detect=detect_cost, upload=None)
+        raise RuntimeError("检测失败：未生成 text.txt。")
+
+    with open("text.txt", "r", encoding="utf-8", errors="ignore") as file_obj:
+        lines = file_obj.readlines()
+
+    for index, line in enumerate(lines):
+        if "RK3288" not in line:
+            continue
+        if index + 1 >= len(lines):
+            break
+
+        next_line = "".join(lines[index + 1].split())
+        if vendor_enabled and (next_line[:3] != vendor or next_line[-4:] != model):
+            state.set_time_info(download=download_cost, detect=detect_cost, upload=None)
+            raise RuntimeError("检测失败：OCR 结果中，'RK3288' 下一行字符与输入不匹配。")
+
+        file_exists = os.path.exists("results.csv")
+        with open("results.csv", "a", newline="", encoding="utf-8") as csv_file:
+            writer = csv.writer(csv_file)
+            if not file_exists:
+                writer.writerow(["SN号", "content", "Vendor", "Model", "date"])
+            writer.writerow([sn, next_line, vendor, model, timestamp])
+        state.append_log("CSV 文件已保存到本地: results.csv")
+
+        upload_cost, _ = upload_log("results.csv", "oss://az05/checkCpu/")
+        state.set_time_info(download=download_cost, detect=detect_cost, upload=upload_cost)
+        state.set_result(f"PASS\n{next_line}")
+        state.last_detection = {
+            "sn": sn,
+            "ocr_text": next_line,
+            "timestamp": timestamp,
+        }
+        return
+
+    state.set_time_info(download=download_cost, detect=detect_cost, upload=None)
+    raise RuntimeError("检测失败：OCR 结果中未找到 'RK3288'。")
+
+
+@app.route("/")
+def index():
+    return render_template("index.html")
+
+
+@app.route("/api/status")
+def api_status():
+    return jsonify(state.snapshot())
+
+
+@app.route("/api/devices")
+def api_devices():
+    devices, selected = refresh_devices()
+    return jsonify({"devices": devices, "selected_device": selected})
+
+
+@app.route("/api/select-device", methods=["POST"])
+def api_select_device():
+    payload = request.get_json(force=True, silent=True) or {}
+    device = payload.get("device")
+    devices = get_video_devices()
+    if device not in devices:
+        return jsonify({"ok": False, "error": "设备不存在。"}), 400
+    ok = camera.open_device(device)
+    state.set_devices(devices, device if ok else None)
+    return jsonify({"ok": ok, "selected_device": state.snapshot()["selected_device"]})
+
+
+@app.route("/api/detect", methods=["POST"])
+def api_detect():
+    payload = request.get_json(force=True, silent=True) or {}
+    sn = (payload.get("sn") or "").strip()
+    vendor = (payload.get("vendor") or "").strip()
+    model = (payload.get("model") or "").strip()
+    vendor_enabled = bool(payload.get("vendor_enabled"))
+
+    if not sn:
+        return jsonify({"ok": False, "error": "SN 不能为空。"}), 400
+    if vendor_enabled and (not vendor or not model):
+        return jsonify({"ok": False, "error": "前三码和后四码不能为空。"}), 400
+
+    snapshot = state.snapshot()
+    if snapshot["detecting"]:
+        return jsonify({"ok": False, "error": "检测进行中，请稍后。"}), 409
+
+    state.detecting = True
+    state.set_result("处理中...")
+    state.set_time_info(download=None, detect=None, upload=None)
+    try:
+        perform_detection(sn, vendor, model, vendor_enabled)
+        return jsonify({"ok": True, "state": state.snapshot()})
+    except RuntimeError as exc:
+        state.last_error = str(exc)
+        state.set_result("FAIL")
+        state.append_log(str(exc))
+        return jsonify({"ok": False, "error": str(exc), "state": state.snapshot()}), 500
+    finally:
+        state.detecting = False
+
+
+@app.route("/video_feed")
+def video_feed():
+    def generate():
+        while True:
+            frame = camera.get_jpeg()
+            yield (
+                b"--frame\r\n"
+                b"Content-Type: image/jpeg\r\n\r\n" + frame + b"\r\n"
+            )
+            time.sleep(0.05)
+
+    return Response(generate(), mimetype="multipart/x-mixed-replace; boundary=frame")
+
+
+def acquire_lock():
+    os.makedirs(os.path.expanduser("~/.cache"), exist_ok=True)
+    lock_file = open(LOCK_PATH, "w")
+    fcntl.flock(lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    return lock_file
 
 
 def main():
-    app = OCRApp()
-    app.window.show_all()
-    Gtk.main()
+    try:
+        lock_file = acquire_lock()
+    except OSError as exc:
+        raise RuntimeError("OCR Web 服务已经在运行。") from exc
+
+    state.append_log("OCR Web 服务启动。")
+    refresh_devices()
+    app.config["LOCK_FILE"] = lock_file
+    app.run(host=APP_HOST, port=APP_PORT, debug=False, threaded=True)
 
 
 if __name__ == "__main__":
