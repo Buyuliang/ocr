@@ -52,8 +52,9 @@
     }
     .grid {
       display: grid;
-      grid-template-columns: 1.2fr 0.9fr;
+      grid-template-columns: 1.05fr 0.95fr;
       gap: 20px;
+      align-items: start;
     }
     .panel {
       background: var(--panel);
@@ -64,6 +65,7 @@
     }
     .video-panel {
       padding: 16px;
+      align-self: start;
     }
     .video-wrap {
       overflow: hidden;
@@ -110,6 +112,15 @@
       background: rgba(255, 255, 255, 0.92);
       color: var(--text);
     }
+    input:disabled {
+      background: #ece5d8;
+      color: #8a7d6a;
+      border-color: #d8ccb8;
+      cursor: not-allowed;
+    }
+    input:disabled::placeholder {
+      color: #9b8f7d;
+    }
     button {
       padding: 12px 16px;
       border: 0;
@@ -132,6 +143,11 @@
       display: flex;
       align-items: center;
       gap: 10px;
+    }
+    .field-tip {
+      margin-top: -4px;
+      color: #7b6e5c;
+      font-size: 13px;
     }
     .checkline input {
       width: auto;
