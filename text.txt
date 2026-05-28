@@ -1,0 +1,3 @@
+Rackchip
+RK3288
+NAAKY35033W 2542
