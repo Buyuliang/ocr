@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>上传 JSON 日志</title>
+  <style>
+    :root {
+      --bg: #f5f1e8;
+      --panel: #fffdf8;
+      --line: #dbcbb1;
+      --text: #2d261d;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "Noto Sans SC", "PingFang SC", sans-serif;
+      background: var(--bg);
+      color: var(--text);
+    }
+    .shell {
+      max-width: 1100px;
+      margin: 0 auto;
+      padding: 24px;
+    }
+    h1 {
+      margin: 0 0 16px;
+      font-size: 28px;
+    }
+    .hint {
+      margin: 0 0 20px;
+      color: #6a5c49;
+    }
+    .entry {
+      margin-bottom: 16px;
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      background: var(--panel);
+      overflow: hidden;
+    }
+    .entry-head {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 14px 16px;
+      background: #f4ead9;
+      font-weight: 700;
+    }
+    pre {
+      margin: 0;
+      padding: 16px;
+      overflow: auto;
+      white-space: pre-wrap;
+      word-break: break-word;
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: 13px;
+      line-height: 1.5;
+    }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <h1>上传与返回 JSON 日志</h1>
+    <p class="hint">页面每 5 秒自动刷新一次，仅展示最近的上传请求和返回 JSON。</p>
+    {% if entries %}
+      {% for entry in entries %}
+        <section class="entry">
+          <div class="entry-head">
+            <span>{{ entry.title }}</span>
+            <span>{{ entry.timestamp }}</span>
+          </div>
+          <pre>{{ entry.text }}</pre>
+        </section>
+      {% endfor %}
+    {% else %}
+      <section class="entry">
+        <div class="entry-head">
+          <span>暂无数据</span>
+          <span>-</span>
+        </div>
+        <pre>还没有上传或返回 JSON 记录。</pre>
+      </section>
+    {% endif %}
+  </div>
+  <script>
+    setTimeout(() => {
+      window.location.reload();
+    }, 5000);
+  </script>
+</body>
+</html>
