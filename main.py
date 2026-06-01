@@ -22,7 +22,7 @@ class UploadError(RuntimeError):
 
 APP_HOST = os.environ.get("OCR_WEB_HOST", "0.0.0.0")
 APP_PORT = int(os.environ.get("OCR_WEB_PORT", "5000"))
-API_BASE = os.environ.get("OCR_SN_API_BASE", "http://192.168.202.203:5000").rstrip("/")
+API_BASE = os.environ.get("OCR_SN_API_BASE", "https://production.focalcrest.com").rstrip("/")
 LOCK_PATH = os.path.expanduser("~/.cache/ocr_web.lock")
 SAVE_DIR = os.path.expanduser("~/ocr")
 os.makedirs(SAVE_DIR, exist_ok=True)
@@ -620,6 +620,18 @@ def require_non_empty_fields(work_order_number, sn, vendor, model):
         raise RuntimeError("、".join(missing) + "不能为空。")
 
 
+def validate_sn(sn):
+    if len(sn) != 12:
+        raise RuntimeError("SN必须为12位。")
+    if not sn.isdigit():
+        raise RuntimeError("SN必须全为数字。")
+    if not sn.startswith("156"):
+        raise RuntimeError("SN客户代码必须为156。")
+    week = int(sn[5:7])
+    if week < 0 or week > 53:
+        raise RuntimeError("SN中的周数必须在00-53之间。")
+
+
 def build_pass_result_text(sn, silkscreen=None):
     lines = ["PASS", "等待下一个设备"]
     if sn:
@@ -673,6 +685,7 @@ def perform_detection(sn, vendor, model, work_order_number, cpu_model):
     state.set_overlay("qr", None)
     sn = resolve_detection_sn(sn)
     require_non_empty_fields(work_order_number, sn, vendor, model)
+    validate_sn(sn)
     ensure_not_duplicate_sn(sn)
     state.mark_seen_sn(sn, "processing")
 

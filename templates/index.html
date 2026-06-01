@@ -608,7 +608,17 @@
       }
       if (!missing.length) {
         if (sn.length !== 12) {
-          return "SN必须为12位数字。";
+          return "SN必须为12位。";
+        }
+        if (!/^\d{12}$/.test(sn)) {
+          return "SN必须全为数字。";
+        }
+        if (!sn.startsWith("156")) {
+          return "SN客户代码必须为156。";
+        }
+        const week = Number(sn.slice(5, 7));
+        if (week < 0 || week > 53) {
+          return "SN中的周数必须在00-53之间。";
         }
         if (vendor.length !== 3) {
           return "前三码必须为 3 位。";

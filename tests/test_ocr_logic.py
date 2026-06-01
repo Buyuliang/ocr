@@ -19,6 +19,17 @@ class OcrLogicTests(unittest.TestCase):
         self.assertEqual(ocr_main.normalize_manual_fragment(" na a "), "NAA")
         self.assertEqual(ocr_main.normalize_manual_fragment(" 25 18 "), "2518")
 
+    def test_validate_sn_accepts_configured_format(self):
+        ocr_main.validate_sn("156222400001")
+
+    def test_validate_sn_rejects_invalid_customer_code(self):
+        with self.assertRaises(RuntimeError):
+            ocr_main.validate_sn("157222400001")
+
+    def test_validate_sn_rejects_invalid_week(self):
+        with self.assertRaises(RuntimeError):
+            ocr_main.validate_sn("156225400001")
+
     def test_build_overlay_payload_uses_given_rect(self):
         payload = ocr_main.build_overlay_payload("CPU", {"x": 1, "y": 2, "w": 3, "h": 4}, "ABC1234")
         self.assertEqual(payload["label"], "CPU")
