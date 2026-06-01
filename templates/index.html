@@ -75,9 +75,6 @@
       background: #161616;
       aspect-ratio: 4 / 3;
     }
-    .video-wrap.roi-mode {
-      cursor: crosshair;
-    }
     .video-wrap img {
       width: 100%;
       height: 100%;
@@ -90,23 +87,6 @@
       position: absolute;
       inset: 0;
       pointer-events: none;
-    }
-    .roi-box {
-      position: absolute;
-      box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.35);
-      pointer-events: none;
-      display: none;
-    }
-    .roi-box.cpu {
-      border: 2px solid #00b4ff;
-      background: rgba(0, 180, 255, 0.18);
-    }
-    .roi-box.qr {
-      border: 2px solid #ff8c42;
-      background: rgba(255, 140, 66, 0.18);
-    }
-    .roi-box.active {
-      box-shadow: 0 0 0 2px rgba(255,255,255,0.6), inset 0 0 0 1px rgba(255, 255, 255, 0.35);
     }
     .overlay-box {
       position: absolute;
@@ -124,42 +104,8 @@
       border-color: #53d57a;
       box-shadow: 0 0 0 1px rgba(0,0,0,0.18) inset, 0 0 0 1px rgba(255,255,255,0.2);
     }
-    .overlay-tag {
-      position: absolute;
-      display: none;
-      max-width: 52%;
-      padding: 8px 10px;
-      border-radius: 12px;
-      border: 1px solid rgba(255,255,255,0.24);
-      font-size: 12px;
-      line-height: 1.35;
-      font-weight: 700;
-      color: #fff;
-      background: transparent;
-      white-space: pre-wrap;
-      word-break: break-word;
-      box-shadow: none;
-    }
-    .overlay-tag.cpu-tag {
-      border-color: rgba(83, 213, 122, 0.45);
-    }
-    .overlay-tag.qr-tag {
-      border-color: rgba(255, 212, 71, 0.45);
-    }
-    .overlay-tag.light-text {
-      color: #fdfdfd;
-      text-shadow: 0 1px 2px rgba(0,0,0,0.95), 0 0 8px rgba(0,0,0,0.85);
-    }
-    .overlay-tag.dark-text {
-      color: #121212;
-      text-shadow: 0 1px 2px rgba(255,255,255,0.92), 0 0 8px rgba(255,255,255,0.82);
-    }
     .box-label {
       display: none;
-    }
-    .roi-panel {
-      display: grid;
-      gap: 10px;
     }
     .section-head {
       display: flex;
@@ -319,26 +265,9 @@
         <div class="video-wrap" id="video-wrap">
           <img id="video-feed" src="/video_feed" alt="视频预览" draggable="false">
           <div class="overlay-layer" id="overlay-layer">
-            <div class="roi-box cpu" id="cpu-roi-box"><span class="box-label" id="cpu-roi-label"></span></div>
-            <div class="roi-box qr" id="qr-roi-box"><span class="box-label" id="qr-roi-label"></span></div>
             <div class="overlay-box cpu-detected" id="cpu-detected-box"><span class="box-label">CPU DETECT</span></div>
             <div class="overlay-box qr-detected" id="qr-detected-box"><span class="box-label">QR DETECT</span></div>
-            <div class="overlay-tag cpu-tag" id="cpu-result-tag"></div>
-            <div class="overlay-tag qr-tag" id="qr-result-tag"></div>
           </div>
-        </div>
-        <div class="roi-panel">
-          <div class="row">
-            <select id="roi-target-select">
-              <option value="cpu">CPU ROI</option>
-              <option value="qr">二维码 ROI</option>
-            </select>
-            <label class="checkline">
-              <input type="checkbox" id="roi-enabled">
-              启用当前 ROI
-            </label>
-          </div>
-          <div class="footnote">当前选中哪一类 ROI，就编辑哪一类；CPU 识别使用 CPU ROI，二维码识别使用二维码 ROI。</div>
         </div>
         <div>
           <div class="section-head">
@@ -359,7 +288,7 @@
           <input id="work-order-input" placeholder="请输入工单号">
 
           <label for="sn-input">输入 SN 号</label>
-          <input id="sn-input" placeholder="请输入 SN" disabled>
+          <input id="sn-input" placeholder="请输入 SN">
 
           <label for="vendor-input">前三码</label>
           <input id="vendor-input" placeholder="前三码" disabled>
@@ -369,18 +298,8 @@
         </div>
 
         <label class="checkline">
-          <input type="checkbox" id="manual-sn-enabled">
-          手动输入 SN
-        </label>
-
-        <label class="checkline">
           <input type="checkbox" id="vendor-enabled">
           编辑前三码 / 后四码
-        </label>
-
-        <label class="checkline">
-          <input type="checkbox" id="force-upload">
-          强制上传
         </label>
 
         <label class="checkline">
@@ -411,7 +330,7 @@
         <div class="row">
           <button id="detect-btn">开始检测</button>
         </div>
-        <div class="footnote">未勾选手动 SN 时，开始检测会先识别二维码并回填 SN，再做 CPU OCR 和上传。循环检测下，同一 SN 上次 PASS 会显示 PASS 等待下一台；同一 SN 上次 FAIL 会继续重试，直到 PASS 或换机。</div>
+        <div class="footnote">SN 固定为手动输入。循环检测下，同一 SN 上次 PASS 会显示 PASS 等待下一台；同一 SN 上次 FAIL 会继续重试，直到 PASS 或换机。</div>
       </section>
     </div>
   </div>
@@ -424,7 +343,6 @@
     const refreshBtn = document.getElementById("refresh-btn");
     const detectBtn = document.getElementById("detect-btn");
     const clearLogBtn = document.getElementById("clear-log-btn");
-    const manualSnEnabled = document.getElementById("manual-sn-enabled");
     const snInput = document.getElementById("sn-input");
     const vendorEnabled = document.getElementById("vendor-enabled");
     const vendorInput = document.getElementById("vendor-input");
@@ -434,30 +352,15 @@
     const videoWrap = document.getElementById("video-wrap");
     const videoFeed = document.getElementById("video-feed");
     const overlayLayer = document.getElementById("overlay-layer");
-    const cpuRoiBox = document.getElementById("cpu-roi-box");
-    const qrRoiBox = document.getElementById("qr-roi-box");
-    const cpuRoiLabel = document.getElementById("cpu-roi-label");
-    const qrRoiLabel = document.getElementById("qr-roi-label");
     const cpuDetectedBox = document.getElementById("cpu-detected-box");
     const qrDetectedBox = document.getElementById("qr-detected-box");
-    const cpuResultTag = document.getElementById("cpu-result-tag");
-    const qrResultTag = document.getElementById("qr-result-tag");
-    const forceUpload = document.getElementById("force-upload");
     const loopDetect = document.getElementById("loop-detect");
-    const roiEnabled = document.getElementById("roi-enabled");
-    const roiTargetSelect = document.getElementById("roi-target-select");
     const ROI_SOURCE_WIDTH = 640;
     const ROI_SOURCE_HEIGHT = 480;
-    let roiDirty = false;
-    let selectedRoiTarget = "cpu";
     let currentState = {operation_mode: "server", local_image_name: null, overlays: {cpu: null, qr: null}};
-    let currentRois = {
-      cpu: {enabled: false, x: 180, y: 150, w: 300, h: 150},
-      qr: {enabled: false, x: 180, y: 150, w: 300, h: 150}
-    };
-    let isDrawingRoi = false;
-    let roiStartPoint = null;
     let loopTimer = null;
+    let activeLoopSn = "";
+    let lastAutoSubmittedSn = "";
     const LOOP_RETRY_DELAY_MS = 1200;
     const LOOP_WAIT_DELAY_MS = 1000;
     const overlaySampleCanvas = document.createElement("canvas");
@@ -495,11 +398,24 @@
       modelInput.disabled = !editable;
     }
 
+    function focusSnInput() {
+      window.requestAnimationFrame(() => {
+        snInput.focus();
+        snInput.select();
+      });
+    }
+
     function sanitizeFixedLengthInput(value, maxLength) {
       return (value || "")
         .toUpperCase()
         .replace(/[^A-Z0-9]/g, "")
         .slice(0, maxLength);
+    }
+
+    function sanitizeSnInput(value) {
+      return (value || "")
+        .replace(/\D/g, "")
+        .slice(0, 12);
     }
 
     function maybeLockVendorInputs() {
@@ -519,131 +435,19 @@
       syncVendorEditState();
     }
 
-    function syncSnEditState() {
-      snInput.disabled = !manualSnEnabled.checked;
+    function clearSnInputForNextDevice() {
+      snInput.value = "";
+      lastAutoSubmittedSn = "";
+      focusSnInput();
     }
 
-    function getCurrentRoi() {
-      return currentRois[selectedRoiTarget] || currentRois.cpu;
-    }
-
-    function getRoiBox(target) {
-      return target === "qr" ? qrRoiBox : cpuRoiBox;
-    }
-
-    function getRoiLabel(target) {
-      return target === "qr" ? qrRoiLabel : cpuRoiLabel;
-    }
-
-    function syncRoiEditState() {
-      const currentRoi = getCurrentRoi();
-      roiEnabled.checked = Boolean(currentRoi.enabled);
-      videoWrap.classList.toggle("roi-mode", roiEnabled.checked);
-      ["cpu", "qr"].forEach((target) => {
-        getRoiBox(target).classList.toggle("active", target === selectedRoiTarget);
-      });
-    }
-
-    function applyRoiState(rois) {
-      if (!rois) {
-        return;
+    function resolveSubmittedSn() {
+      const manualValue = snInput.value.trim();
+      if (manualValue) {
+        activeLoopSn = manualValue;
+        return manualValue;
       }
-      if (roiDirty) {
-        return;
-      }
-      ["cpu", "qr"].forEach((target) => {
-        const roi = rois[target] || currentRois[target];
-        currentRois[target] = {
-          enabled: Boolean(roi.enabled),
-          x: Number(roi.x),
-          y: Number(roi.y),
-          w: Number(roi.w),
-          h: Number(roi.h)
-        };
-      });
-      syncRoiEditState();
-      renderRoiOverlay();
-    }
-
-    function renderRoiOverlay() {
-      const width = videoWrap.clientWidth;
-      const height = videoWrap.clientHeight;
-      if (!width || !height) {
-        return;
-      }
-      ["cpu", "qr"].forEach((target) => {
-        const roi = currentRois[target];
-        const roiBox = getRoiBox(target);
-        if (!roi.enabled) {
-          roiBox.style.display = "none";
-          return;
-        }
-        roiBox.style.display = "block";
-        roiBox.style.left = `${(roi.x / ROI_SOURCE_WIDTH) * width}px`;
-        roiBox.style.top = `${(roi.y / ROI_SOURCE_HEIGHT) * height}px`;
-        roiBox.style.width = `${(roi.w / ROI_SOURCE_WIDTH) * width}px`;
-        roiBox.style.height = `${(roi.h / ROI_SOURCE_HEIGHT) * height}px`;
-      });
-      renderDetectionOverlay();
-    }
-
-    function getPointInVideo(event) {
-      const rect = videoWrap.getBoundingClientRect();
-      const x = Math.min(Math.max(event.clientX - rect.left, 0), rect.width);
-      const y = Math.min(Math.max(event.clientY - rect.top, 0), rect.height);
-      return {x, y, width: rect.width, height: rect.height};
-    }
-
-    function drawTempRoi(start, end) {
-      const left = Math.min(start.x, end.x);
-      const top = Math.min(start.y, end.y);
-      const width = Math.abs(end.x - start.x);
-      const height = Math.abs(end.y - start.y);
-      const roiBox = getRoiBox(selectedRoiTarget);
-      roiBox.style.display = "block";
-      roiBox.style.left = `${left}px`;
-      roiBox.style.top = `${top}px`;
-      roiBox.style.width = `${width}px`;
-      roiBox.style.height = `${height}px`;
-    }
-
-    async function saveRoiState(roi) {
-      const response = await fetch("/api/roi", {
-        method: "POST",
-        headers: {"Content-Type": "application/json"},
-        body: JSON.stringify({...roi, target: selectedRoiTarget})
-      });
-      const data = await response.json();
-      if (response.ok) {
-        roiDirty = false;
-        applyRoiState(data.rois);
-      }
-      await fetchStatus();
-    }
-
-    async function finishRoiDraw(endPoint) {
-      if (!roiStartPoint) {
-        return;
-      }
-      const left = Math.min(roiStartPoint.x, endPoint.x);
-      const top = Math.min(roiStartPoint.y, endPoint.y);
-      const width = Math.abs(endPoint.x - roiStartPoint.x);
-      const height = Math.abs(endPoint.y - roiStartPoint.y);
-      roiStartPoint = null;
-      isDrawingRoi = false;
-
-      if (width < 8 || height < 8) {
-        renderRoiOverlay();
-        return;
-      }
-
-      await saveRoiState({
-        enabled: true,
-        x: Math.round((left / endPoint.width) * ROI_SOURCE_WIDTH),
-        y: Math.round((top / endPoint.height) * ROI_SOURCE_HEIGHT),
-        w: Math.round((width / endPoint.width) * ROI_SOURCE_WIDTH),
-        h: Math.round((height / endPoint.height) * ROI_SOURCE_HEIGHT)
-      });
+      return activeLoopSn;
     }
 
     function applyResultState(text) {
@@ -675,91 +479,12 @@
       return Math.min(Math.max(value, min), max);
     }
 
-    function sampleFrameBrightness(rect) {
-      if (!overlaySampleContext || !videoFeed.complete || !videoFeed.naturalWidth || !videoFeed.naturalHeight) {
-        return null;
-      }
-      const wrapWidth = videoWrap.clientWidth;
-      const wrapHeight = videoWrap.clientHeight;
-      if (!wrapWidth || !wrapHeight) {
-        return null;
-      }
-      const sampleSize = 24;
-      const sourceX = Math.round(clamp(((rect.left + rect.width / 2) / wrapWidth) * videoFeed.naturalWidth, 0, videoFeed.naturalWidth - 1));
-      const sourceY = Math.round(clamp(((rect.top + rect.height / 2) / wrapHeight) * videoFeed.naturalHeight, 0, videoFeed.naturalHeight - 1));
-      const sampleHalf = Math.floor(sampleSize / 2);
-      const sx = clamp(sourceX - sampleHalf, 0, Math.max(0, videoFeed.naturalWidth - sampleSize));
-      const sy = clamp(sourceY - sampleHalf, 0, Math.max(0, videoFeed.naturalHeight - sampleSize));
-      overlaySampleCanvas.width = sampleSize;
-      overlaySampleCanvas.height = sampleSize;
-      try {
-        overlaySampleContext.clearRect(0, 0, sampleSize, sampleSize);
-        overlaySampleContext.drawImage(videoFeed, sx, sy, sampleSize, sampleSize, 0, 0, sampleSize, sampleSize);
-        const imageData = overlaySampleContext.getImageData(0, 0, sampleSize, sampleSize).data;
-        let total = 0;
-        const pixelCount = imageData.length / 4;
-        for (let index = 0; index < imageData.length; index += 4) {
-          total += 0.299 * imageData[index] + 0.587 * imageData[index + 1] + 0.114 * imageData[index + 2];
-        }
-        return total / pixelCount;
-      } catch (error) {
-        return null;
-      }
-    }
-
-    function applyTagContrast(tagEl, rect) {
-      const brightness = sampleFrameBrightness(rect);
-      const useDarkText = brightness != null && brightness >= 150;
-      tagEl.classList.toggle("dark-text", useDarkText);
-      tagEl.classList.toggle("light-text", !useDarkText);
-    }
-
-    function resetOverlayTag(tagEl) {
-      tagEl.style.display = "none";
-      tagEl.textContent = "";
-      tagEl.style.left = "";
-      tagEl.style.top = "";
-      tagEl.style.width = "";
-      tagEl.classList.remove("dark-text", "light-text");
-    }
-
     function resetOverlayBox(boxEl) {
       boxEl.style.display = "none";
       boxEl.style.left = "";
       boxEl.style.top = "";
       boxEl.style.width = "";
       boxEl.style.height = "";
-    }
-
-    function placeTag(tagEl, text, anchorRect, blockedRects) {
-      if (!text || !anchorRect) {
-        resetOverlayTag(tagEl);
-        return;
-      }
-      tagEl.textContent = text;
-      tagEl.style.display = "block";
-      const margin = 8;
-      const tagWidth = Math.min(videoWrap.clientWidth * 0.52, 320);
-      const preferredLeft = Math.min(Math.max(anchorRect.left, margin), Math.max(margin, videoWrap.clientWidth - tagWidth - margin));
-      const tagHeight = tagEl.offsetHeight || 44;
-      const candidates = [
-        {left: preferredLeft, top: Math.max(margin, anchorRect.top - tagHeight - margin), width: tagWidth, height: tagHeight},
-        {left: preferredLeft, top: Math.min(videoWrap.clientHeight - tagHeight - margin, anchorRect.top + anchorRect.height + margin), width: tagWidth, height: tagHeight},
-        {left: Math.max(margin, anchorRect.left - tagWidth - margin), top: anchorRect.top, width: tagWidth, height: tagHeight},
-        {left: Math.min(videoWrap.clientWidth - tagWidth - margin, anchorRect.left + anchorRect.width + margin), top: anchorRect.top, width: tagWidth, height: tagHeight}
-      ];
-      let selected = candidates[0];
-      for (const candidate of candidates) {
-        if (!blockedRects.some((blocked) => intersects(candidate, blocked))) {
-          selected = candidate;
-          break;
-        }
-      }
-      tagEl.style.left = `${selected.left}px`;
-      tagEl.style.top = `${selected.top}px`;
-      tagEl.style.width = `${selected.width}px`;
-      applyTagContrast(tagEl, selected);
-      blockedRects.push(selected);
     }
 
     function renderOverlayBox(boxEl, overlay, width, height) {
@@ -784,38 +509,10 @@
       }
       resetOverlayBox(cpuDetectedBox);
       resetOverlayBox(qrDetectedBox);
-      resetOverlayTag(cpuResultTag);
-      resetOverlayTag(qrResultTag);
-      const blockedRects = [];
       const cpuOverlay = currentState.overlays?.cpu;
       const qrOverlay = currentState.overlays?.qr;
-      const roiRects = [];
-      const roiRectMap = {};
-      const defaultQrRect = {left: 12, top: 12, width: Math.min(width * 0.42, 260), height: 44};
-      const defaultCpuRect = {left: Math.max(12, width - Math.min(width * 0.42, 260) - 12), top: 12, width: Math.min(width * 0.42, 260), height: 44};
-      ["cpu", "qr"].forEach((target) => {
-        const roi = currentRois[target];
-        if (roi.enabled) {
-          const rect = scaleRect(roi, width, height);
-          roiRects.push(rect);
-          roiRectMap[target] = rect;
-        }
-      });
       const qrRect = renderOverlayBox(qrDetectedBox, qrOverlay, width, height);
       const cpuRect = renderOverlayBox(cpuDetectedBox, cpuOverlay, width, height);
-      roiRects.forEach((rect) => blockedRects.push(rect));
-      if (qrRect) {
-        blockedRects.push(qrRect);
-      }
-      if (cpuRect) {
-        blockedRects.push(cpuRect);
-      }
-      const resultText = String(currentState.result_text || "");
-      const hasDetectionOutcome = currentState.last_result_status && currentState.last_result_status !== "idle";
-      const qrText = qrOverlay?.text || (hasDetectionOutcome ? "null" : "");
-      const cpuText = cpuOverlay?.text || (hasDetectionOutcome ? "null" : "");
-      placeTag(qrResultTag, qrText, qrRect || roiRectMap.qr || defaultQrRect, blockedRects);
-      placeTag(cpuResultTag, cpuText, cpuRect || roiRectMap.cpu || defaultCpuRect, blockedRects);
     }
 
     function renderState(data) {
@@ -844,9 +541,7 @@
       document.getElementById("detect-cost").textContent = costText(data.time_info.detect);
       document.getElementById("upload-cost").textContent = costText(data.time_info.upload);
       updateDeviceOptions(data.devices, data.selected_device);
-      syncSnEditState();
       syncVendorEditState();
-      applyRoiState(data.rois);
       renderDetectionOverlay();
       logBox.textContent = data.logs.join("\n");
       if (shouldStickToBottom) {
@@ -895,60 +590,98 @@
 
     function validateDetectInputs() {
       const workOrderNumber = document.getElementById("work-order-input").value.trim();
-      const sn = snInput.value.trim();
+      const sn = resolveSubmittedSn();
       const vendor = sanitizeFixedLengthInput(vendorInput.value, 3);
       const model = sanitizeFixedLengthInput(modelInput.value, 4);
       const missing = [];
       if (!workOrderNumber) {
         missing.push("工单号");
       }
-      if (manualSnEnabled.checked && !sn) {
+      if (!sn) {
         missing.push("SN");
       }
-      if (vendor.length !== 3) {
+      if (!vendor) {
         missing.push("前三码");
       }
-      if (model.length !== 4) {
+      if (!model) {
         missing.push("后四码");
       }
       if (!missing.length) {
+        if (sn.length !== 12) {
+          return "SN必须为12位数字。";
+        }
+        if (vendor.length !== 3) {
+          return "前三码必须为 3 位。";
+        }
+        if (model.length !== 4) {
+          return "后四码必须为 4 位。";
+        }
         return null;
       }
       return `${missing.join("、")}不能为空。`;
     }
 
+    async function syncClientResult(resultText, status, errorText = "") {
+      try {
+        const response = await fetch("/api/client-result", {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({
+            result_text: resultText,
+            status,
+            error: errorText
+          })
+        });
+        const data = await response.json();
+        if (response.ok) {
+          currentState = {
+            ...currentState,
+            ...(data.state || {})
+          };
+        }
+      } catch (error) {
+      }
+    }
+
     async function detect(fromLoop = false) {
       const validationError = validateDetectInputs();
       if (validationError) {
-        resultBox.textContent = `FAIL\n${validationError}`;
+        const failText = `FAIL\n${validationError}`;
+        resultBox.textContent = failText;
         statusPill.textContent = validationError;
         applyResultState(resultBox.textContent);
         clearLoopTimer();
+        await syncClientResult(failText, "fail", validationError);
         return;
       }
       clearLoopTimer();
       detectBtn.disabled = true;
       statusPill.textContent = loopDetect.checked ? "循环检测中" : "检测进行中";
+      const submittedSn = resolveSubmittedSn();
+      if (!fromLoop) {
+        lastAutoSubmittedSn = submittedSn;
+      }
+      clearSnInputForNextDevice();
       try {
         const response = await fetch("/api/detect", {
           method: "POST",
           headers: {"Content-Type": "application/json"},
           body: JSON.stringify({
             work_order_number: document.getElementById("work-order-input").value,
-            sn: snInput.value,
-            manual_sn_enabled: manualSnEnabled.checked,
+            sn: submittedSn,
             vendor: vendorInput.value,
-            model: modelInput.value,
-            force_upload: forceUpload.checked
+            model: modelInput.value
           })
         });
         const data = await response.json();
         if (!response.ok && response.status !== 409) {
           resultBox.textContent = "FAIL";
         }
-        const resolvedSn = data.sn || data.state?.last_seen_sn;
-        if (resolvedSn && !manualSnEnabled.checked) {
-          snInput.value = resolvedSn;
+        const resultStatus = data.state?.last_result_status;
+        if (resultStatus === "pass") {
+          activeLoopSn = "";
+          clearSnInputForNextDevice();
+          statusPill.textContent = "PASS，等待下一台设备";
         }
         renderState(data.state || data);
         if (!response.ok && data.error) {
@@ -956,25 +689,35 @@
         }
         if (loopDetect.checked) {
           const isBusyConflict = response.status === 409 && (data.error || "").includes("检测进行中");
-          const isPassWait = response.status === 409 && data.state?.last_result_status === "pass";
-          const shouldContinue =
-            response.ok ||
-            response.status === 500 ||
-            isBusyConflict ||
-            isPassWait;
+          const shouldContinue = isBusyConflict;
           if (shouldContinue) {
-            scheduleLoopDetect(isPassWait ? LOOP_WAIT_DELAY_MS : LOOP_RETRY_DELAY_MS);
+            scheduleLoopDetect(LOOP_RETRY_DELAY_MS);
           }
         }
       } catch (error) {
         resultBox.textContent = "FAIL";
         statusPill.textContent = "检测请求失败";
-        if (loopDetect.checked) {
-          scheduleLoopDetect();
-        }
       } finally {
         detectBtn.disabled = false;
+        focusSnInput();
       }
+    }
+
+    function maybeAutoDetectFromSn() {
+      if (!loopDetect.checked) {
+        return;
+      }
+      if (currentState.detecting) {
+        return;
+      }
+      const sn = resolveSubmittedSn();
+      if (sn.length !== 12) {
+        return;
+      }
+      if (sn === lastAutoSubmittedSn) {
+        return;
+      }
+      detect(true);
     }
 
     async function clearLocalImageMode() {
@@ -1022,59 +765,36 @@
     vendorEnabled.addEventListener("change", syncVendorEditState);
     vendorInput.addEventListener("input", maybeLockVendorInputs);
     modelInput.addEventListener("input", maybeLockVendorInputs);
-    manualSnEnabled.addEventListener("change", syncSnEditState);
-    roiTargetSelect.addEventListener("change", () => {
-      selectedRoiTarget = roiTargetSelect.value;
-      roiDirty = false;
-      syncRoiEditState();
-      renderRoiOverlay();
-    });
-    roiEnabled.addEventListener("change", async () => {
-      roiDirty = true;
-      const currentRoi = {...getCurrentRoi(), enabled: roiEnabled.checked};
-      currentRois[selectedRoiTarget] = currentRoi;
-      syncRoiEditState();
-      renderRoiOverlay();
-      await saveRoiState(currentRoi);
+    snInput.addEventListener("input", () => {
+      const sanitized = sanitizeSnInput(snInput.value);
+      if (snInput.value !== sanitized) {
+        snInput.value = sanitized;
+      }
+      const nextValue = sanitized.trim();
+      if (nextValue) {
+        activeLoopSn = nextValue;
+      } else {
+        activeLoopSn = "";
+        lastAutoSubmittedSn = "";
+      }
+      maybeAutoDetectFromSn();
     });
     refreshBtn.addEventListener("click", refreshDevices);
     detectBtn.addEventListener("click", () => detect(false));
     loopDetect.addEventListener("change", () => {
       if (loopDetect.checked) {
-        statusPill.textContent = "循环检测已开启";
-        detect(true);
+        statusPill.textContent = "循环检测已开启，等待12位SN";
+        maybeAutoDetectFromSn();
       } else {
         clearLoopTimer();
+        activeLoopSn = "";
+        lastAutoSubmittedSn = "";
         statusPill.textContent = "循环检测已关闭";
       }
     });
     clearLogBtn.addEventListener("click", clearLogs);
     deviceSelect.addEventListener("change", changeDevice);
-    videoWrap.addEventListener("mousedown", (event) => {
-      if (!roiEnabled.checked) {
-        return;
-      }
-      roiDirty = true;
-      isDrawingRoi = true;
-      roiStartPoint = getPointInVideo(event);
-      drawTempRoi(roiStartPoint, roiStartPoint);
-    });
-    window.addEventListener("mousemove", (event) => {
-      if (!isDrawingRoi || !roiStartPoint) {
-        return;
-      }
-      drawTempRoi(roiStartPoint, getPointInVideo(event));
-    });
-    window.addEventListener("mouseup", async (event) => {
-      if (!isDrawingRoi || !roiStartPoint) {
-        return;
-      }
-      await finishRoiDraw(getPointInVideo(event));
-    });
-    window.addEventListener("resize", () => {
-      renderRoiOverlay();
-      renderDetectionOverlay();
-    });
+    window.addEventListener("resize", renderDetectionOverlay);
     videoFeed.addEventListener("load", renderDetectionOverlay);
     ocrTitleTrigger.addEventListener("dblclick", async () => {
       if (currentState.operation_mode === "server") {
@@ -1096,11 +816,8 @@
       localImageInput.value = "";
     });
 
-    selectedRoiTarget = roiTargetSelect.value;
-    syncSnEditState();
     maybeLockVendorInputs();
     syncVendorEditState();
-    syncRoiEditState();
     applyResultState(resultBox.textContent);
     refreshDevices();
     fetchStatus();

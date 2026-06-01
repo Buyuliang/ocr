@@ -16,10 +16,6 @@ import numpy as np
 from flask import Flask, Response, jsonify, render_template, request
 
 
-class DuplicateSNError(RuntimeError):
-    pass
-
-
 class UploadError(RuntimeError):
     pass
 
@@ -39,10 +35,6 @@ LOGIN_USERNAME = "mixtile"
 LOGIN_PASSWORD = "rK#nH6wea]h<PP%]_EdA"
 CPU_MODELS = ["RK3288"]
 DEFAULT_CPU_MODEL = "RK3288"
-DEFAULT_ROI = {"enabled": False, "x": 180, "y": 150, "w": 300, "h": 150}
-ROI_TARGETS = {"cpu": "CPU", "qr": "二维码"}
-DEFAULT_ROIS = {target: dict(DEFAULT_ROI) for target in ROI_TARGETS}
-ROI_CONFIG_PATH = os.path.expanduser("~/.cache/ocr_web_rois.json")
 DISPLAY_FRAME_WIDTH = 640
 DISPLAY_FRAME_HEIGHT = 480
 
@@ -82,7 +74,6 @@ class AppState:
         self.source_mode = "camera"
         self.operation_mode = "server"
         self.local_image_name = None
-        self.rois = {target: dict(roi) for target, roi in DEFAULT_ROIS.items()}
         self.overlays = {"cpu": None, "qr": None}
 
     def append_log(self, message):
@@ -147,12 +138,6 @@ class AppState:
         with self.lock:
             self.overlays = {"cpu": None, "qr": None}
 
-    def set_roi(self, target, roi):
-        if target not in ROI_TARGETS:
-            raise RuntimeError("未知 ROI 目标。")
-        with self.lock:
-            self.rois[target] = dict(roi)
-
     def clear_logs(self):
         with self.lock:
             self.logs.clear()
@@ -178,7 +163,6 @@ class AppState:
                 "source_mode": self.source_mode,
                 "operation_mode": self.operation_mode,
                 "local_image_name": self.local_image_name,
-                "rois": {target: dict(roi) for target, roi in self.rois.items()},
                 "overlays": dict(self.overlays),
             }
 
@@ -263,6 +247,10 @@ class CameraManager:
                 return None
             return self.current_frame.copy()
 
+    def has_uploaded_frame(self):
+        with self.lock:
+            return self.uploaded_frame is not None
+
     def enter_local_mode(self):
         self.state.set_operation_mode("local")
         self.state.set_source_mode("local_image", self.state.snapshot().get("local_image_name"))
@@ -326,40 +314,6 @@ def format_elapsed(value):
     return round(value, 3)
 
 
-def load_saved_rois():
-    rois = {target: dict(roi) for target, roi in DEFAULT_ROIS.items()}
-    if not os.path.exists(ROI_CONFIG_PATH):
-        return rois
-    try:
-        with open(ROI_CONFIG_PATH, 'r', encoding='utf-8') as file_obj:
-            payload = json.load(file_obj)
-    except (OSError, json.JSONDecodeError):
-        return rois
-
-    saved_rois = payload.get('rois', payload)
-    if not isinstance(saved_rois, dict):
-        return rois
-
-    for target in ROI_TARGETS:
-        candidate = saved_rois.get(target)
-        if not isinstance(candidate, dict):
-            continue
-        try:
-            rois[target] = normalize_roi(candidate)
-        except (RuntimeError, ValueError, TypeError):
-            continue
-    return rois
-
-
-def save_rois(rois):
-    os.makedirs(os.path.dirname(ROI_CONFIG_PATH), exist_ok=True)
-    payload = {'rois': rois}
-    temp_path = ROI_CONFIG_PATH + '.tmp'
-    with open(temp_path, 'w', encoding='utf-8') as file_obj:
-        json.dump(payload, file_obj, ensure_ascii=False, indent=2)
-    os.replace(temp_path, ROI_CONFIG_PATH)
-
-
 def decode_uploaded_image(file_storage):
     data = file_storage.read()
     if not data:
@@ -388,59 +342,8 @@ def refresh_devices():
     return devices, selected
 
 
-def normalize_roi(payload, frame_shape=None):
-    roi = {
-        "enabled": bool(payload.get("enabled")),
-        "x": int(payload.get("x", DEFAULT_ROI["x"])),
-        "y": int(payload.get("y", DEFAULT_ROI["y"])),
-        "w": int(payload.get("w", DEFAULT_ROI["w"])),
-        "h": int(payload.get("h", DEFAULT_ROI["h"])),
-    }
-    for key in ("x", "y", "w", "h"):
-        if roi[key] < 0:
-            raise RuntimeError("ROI 参数不能为负数。")
-    if roi["w"] <= 0 or roi["h"] <= 0:
-        raise RuntimeError("ROI 宽高必须大于 0。")
-
-    if frame_shape is not None:
-        height, width = frame_shape[:2]
-        if roi["x"] >= width or roi["y"] >= height:
-            raise RuntimeError("ROI 起点超出图像范围。")
-        roi["w"] = min(roi["w"], width - roi["x"])
-        roi["h"] = min(roi["h"], height - roi["y"])
-        if roi["w"] <= 0 or roi["h"] <= 0:
-            raise RuntimeError("ROI 区域无效。")
-    return roi
-
-
 def get_display_shape():
     return (DISPLAY_FRAME_HEIGHT, DISPLAY_FRAME_WIDTH, 3)
-
-
-def map_roi_to_frame(roi, frame_shape):
-    display_roi = normalize_roi(roi, get_display_shape())
-    if not display_roi["enabled"]:
-        return normalize_roi(display_roi, frame_shape), display_roi
-
-    frame_height, frame_width = frame_shape[:2]
-    scale_x = frame_width / DISPLAY_FRAME_WIDTH
-    scale_y = frame_height / DISPLAY_FRAME_HEIGHT
-    x1 = round(display_roi["x"] * scale_x)
-    y1 = round(display_roi["y"] * scale_y)
-    x2 = round((display_roi["x"] + display_roi["w"]) * scale_x)
-    y2 = round((display_roi["y"] + display_roi["h"]) * scale_y)
-    actual_roi = normalize_roi(
-        {
-            "enabled": True,
-            "x": x1,
-            "y": y1,
-            "w": max(1, x2 - x1),
-            "h": max(1, y2 - y1),
-        },
-        frame_shape,
-    )
-    return actual_roi, display_roi
-
 
 def map_points_to_display(points, frame_shape):
     if points is None:
@@ -478,13 +381,17 @@ def build_overlay_payload(label, rect, text, points=None):
     }
 
 
-def extract_detection_image(frame, roi):
-    actual_roi, display_roi = map_roi_to_frame(roi, frame.shape)
-    if not actual_roi["enabled"]:
-        return frame, actual_roi, display_roi
-    x, y, w, h = actual_roi["x"], actual_roi["y"], actual_roi["w"], actual_roi["h"]
-    cropped = frame[y:y + h, x:x + w].copy()
-    return cropped, actual_roi, display_roi
+def get_detection_frame():
+    snapshot = state.snapshot()
+    operation_mode = snapshot.get("operation_mode")
+    if operation_mode == "local" and not camera.has_uploaded_frame():
+        raise RuntimeError("本地图片模式下请先双击 OCR 选择本地图片。")
+    frame = camera.get_frame_copy()
+    if frame is None:
+        if operation_mode == "local":
+            raise RuntimeError("本地图片模式下当前没有可识别的图片。")
+        raise RuntimeError("摄像头未打开或当前没有有效画面。")
+    return frame
 
 
 def run_command(command):
@@ -564,8 +471,8 @@ def translate_points(points, offset_x, offset_y):
     return array
 
 
-def decode_qr_codes(frame, roi):
-    detect_frame, actual_roi, display_roi = extract_detection_image(frame, roi)
+def decode_qr_codes(frame):
+    detect_frame = frame
     detector = cv2.QRCodeDetector()
     variants = [detect_frame]
 
@@ -591,8 +498,7 @@ def decode_qr_codes(frame, roi):
                     decoded.append(value)
                     candidate_points = None
                     if points is not None and len(points) > index:
-                        translated = translate_points(points[index], actual_roi["x"], actual_roi["y"])
-                        display_points = map_points_to_display(translated, frame.shape)
+                        display_points = map_points_to_display(points[index], frame.shape)
                         overlay_payload = build_overlay_payload(
                             "QR",
                             points_to_rect(display_points),
@@ -600,9 +506,7 @@ def decode_qr_codes(frame, roi):
                             display_points,
                         )
         if decoded:
-            if overlay_payload is None:
-                overlay_payload = build_overlay_payload("QR", display_roi, decoded[0])
-            return decoded, display_roi, overlay_payload
+            return decoded, overlay_payload
 
         try:
             text, points, _ = detector.detectAndDecode(candidate)
@@ -612,33 +516,22 @@ def decode_qr_codes(frame, roi):
         if value and value not in seen:
             seen.add(value)
             decoded.append(value)
-            translated = translate_points(points, actual_roi["x"], actual_roi["y"])
-            display_points = map_points_to_display(translated, frame.shape)
+            display_points = map_points_to_display(points, frame.shape)
             overlay_payload = build_overlay_payload(
                 "QR",
-                points_to_rect(display_points) or display_roi,
+                points_to_rect(display_points),
                 value,
                 display_points,
             )
-            return decoded, display_roi, overlay_payload
+            return decoded, overlay_payload
 
-    return decoded, display_roi, None
+    return decoded, None
 
 
 def detect_qr_codes(update_result=True):
-    frame = camera.get_frame_copy()
-    if frame is None:
-        raise RuntimeError('摄像头未打开或当前没有有效画面。')
-    roi = state.snapshot()['rois']['qr']
-    decoded, display_roi, overlay_payload = decode_qr_codes(frame, roi)
-    if display_roi['enabled']:
-        state.append_log(
-            '二维码识别 ROI: '
-            f"x={display_roi['x']}, y={display_roi['y']}, "
-            f"w={display_roi['w']}, h={display_roi['h']}"
-        )
-    else:
-        state.append_log('二维码识别使用全图。')
+    frame = get_detection_frame()
+    decoded, overlay_payload = decode_qr_codes(frame)
+    state.append_log('二维码识别使用全图。')
 
     if not decoded:
         state.set_overlay("qr", None)
@@ -647,7 +540,7 @@ def detect_qr_codes(update_result=True):
     state.append_log('二维码识别结果: ' + ' | '.join(decoded))
     if update_result:
         state.set_result('QR\n' + '\n'.join(decoded))
-    state.set_overlay("qr", overlay_payload or build_overlay_payload("QR", display_roi, decoded[0]))
+    state.set_overlay("qr", overlay_payload)
     state.mark_result_status(state.snapshot().get("last_result_status") or "idle", None)
     return decoded
 
@@ -727,6 +620,15 @@ def require_non_empty_fields(work_order_number, sn, vendor, model):
         raise RuntimeError("、".join(missing) + "不能为空。")
 
 
+def build_pass_result_text(sn, silkscreen=None):
+    lines = ["PASS", "等待下一个设备"]
+    if sn:
+        lines.append(f"SN: {sn}")
+    if silkscreen:
+        lines.append(f"CPU: {silkscreen}")
+    return "\n".join(lines)
+
+
 def select_silkscreen(candidates, vendor, model):
     if vendor or model:
         for candidate in candidates:
@@ -739,11 +641,11 @@ def select_silkscreen(candidates, vendor, model):
     return candidates[0]
 
 
-def ensure_not_duplicate_sn(sn, force_upload=False):
+def ensure_not_duplicate_sn(sn):
     snapshot = state.snapshot()
     last_sn = snapshot.get('last_seen_sn')
     last_result_status = snapshot.get('last_result_status')
-    if force_upload or not last_sn:
+    if not last_sn:
         return
     if last_sn == sn and last_result_status == 'pass':
         last_detection = snapshot.get("last_detection") or {}
@@ -755,52 +657,34 @@ def ensure_not_duplicate_sn(sn, force_upload=False):
                 upload=last_time_info.get("upload"),
             )
         state.set_result(f'PASS\n等待下一个设备\nSN: {sn}')
-        raise DuplicateSNError(f'SN {sn} 已经 PASS，请更换下一台设备后再检测。')
+        raise RuntimeError(f'SN {sn} 已经 PASS，请更换下一台设备后再检测。')
 
 
-def resolve_detection_sn(sn, manual_sn_enabled):
-    if manual_sn_enabled:
-        normalized_sn = (sn or "").strip()
-        if not normalized_sn:
-            raise RuntimeError("手动 SN 号不能为空。")
-        state.append_log(f"本次检测使用手动 SN: {normalized_sn}")
-        return normalized_sn
-
-    qr_codes = detect_qr_codes(update_result=False)
-    normalized_sn = qr_codes[0].strip()
-    state.append_log(f"本次检测使用二维码 SN: {normalized_sn}")
+def resolve_detection_sn(sn):
+    normalized_sn = (sn or "").strip()
+    if not normalized_sn:
+        raise RuntimeError("SN不能为空。")
+    state.append_log(f"本次检测使用手动 SN: {normalized_sn}")
     return normalized_sn
 
 
-def perform_detection(sn, manual_sn_enabled, vendor, model, work_order_number, cpu_model, force_upload=False):
+def perform_detection(sn, vendor, model, work_order_number, cpu_model):
     state.set_overlay("cpu", None)
-    if manual_sn_enabled:
-        state.set_overlay("qr", None)
-    sn = resolve_detection_sn(sn, manual_sn_enabled)
+    state.set_overlay("qr", None)
+    sn = resolve_detection_sn(sn)
     require_non_empty_fields(work_order_number, sn, vendor, model)
-    ensure_not_duplicate_sn(sn, force_upload=force_upload)
+    ensure_not_duplicate_sn(sn)
     state.mark_seen_sn(sn, "processing")
 
-    frame = camera.get_frame_copy()
-    if frame is None:
-        raise RuntimeError("摄像头未打开或当前没有有效画面。")
-    roi = state.snapshot()["rois"]["cpu"]
-
+    frame = get_detection_frame()
     state.set_time_info(download=None, detect=None, upload=None)
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     photo_path = os.path.join(SAVE_DIR, f"{sn}_{timestamp}.jpg")
-    detect_frame, normalized_roi, display_roi = extract_detection_image(frame, roi)
+    detect_frame = frame
     cv2.imwrite(photo_path, detect_frame)
     state.append_log(f"照片已保存到: {photo_path}")
-    if display_roi["enabled"]:
-        state.append_log(
-            "ROI 识别区域: "
-            f"x={display_roi['x']}, y={display_roi['y']}, "
-            f"w={display_roi['w']}, h={display_roi['h']}"
-        )
-    else:
-        state.append_log("ROI 未启用，使用全图识别。")
+    state.append_log("CPU 识别使用全图。")
 
     detect_started_at = time.perf_counter()
     try:
@@ -822,11 +706,25 @@ def perform_detection(sn, manual_sn_enabled, vendor, model, work_order_number, c
 
     cpu_overlay_text = build_cpu_overlay_text(lines, cpu_model)
     if cpu_overlay_text:
-        state.set_overlay("cpu", build_overlay_payload("CPU", display_roi, cpu_overlay_text))
+        state.set_overlay(
+            "cpu",
+            build_overlay_payload(
+                "CPU",
+                {"x": 0, "y": 0, "w": DISPLAY_FRAME_WIDTH, "h": DISPLAY_FRAME_HEIGHT},
+                cpu_overlay_text,
+            ),
+        )
 
     candidates = analyze_ocr_lines(lines, cpu_model)
     silkscreen = select_silkscreen(candidates, vendor, model)
-    state.set_overlay("cpu", build_overlay_payload("CPU", display_roi, silkscreen))
+    state.set_overlay(
+        "cpu",
+        build_overlay_payload(
+            "CPU",
+            {"x": 0, "y": 0, "w": DISPLAY_FRAME_WIDTH, "h": DISPLAY_FRAME_HEIGHT},
+            silkscreen,
+        ),
+    )
 
     normalized_silkscreen = re.sub(r"\s+", "", silkscreen)
     normalized_silkscreen_upper = normalized_silkscreen.upper()
@@ -845,7 +743,7 @@ def perform_detection(sn, manual_sn_enabled, vendor, model, work_order_number, c
         }
     )
     state.set_time_info(download=login_cost, detect=detect_cost, upload=upload_cost)
-    state.set_result(f"PASS\n{silkscreen}")
+    state.set_result(build_pass_result_text(sn, silkscreen))
     state.mark_result_status("pass", None)
     detection_payload = {
         "sn": sn,
@@ -938,27 +836,6 @@ def api_local_mode():
     return jsonify({"ok": False, "error": "未知本地模式动作。"}), 400
 
 
-@app.route("/api/roi", methods=["POST"])
-def api_set_roi():
-    payload = request.get_json(force=True, silent=True) or {}
-    target = (payload.get("target") or "cpu").strip().lower()
-    if target not in ROI_TARGETS:
-        return jsonify({"ok": False, "error": "未知 ROI 目标。"}), 400
-    frame = camera.get_frame_copy()
-    frame_shape = frame.shape if frame is not None else None
-    try:
-        roi = normalize_roi(payload, frame_shape)
-    except (RuntimeError, ValueError) as exc:
-        return jsonify({"ok": False, "error": str(exc)}), 400
-    state.set_roi(target, roi)
-    save_rois(state.snapshot()["rois"])
-    state.append_log(
-        f"{ROI_TARGETS[target]} ROI 设置已更新: "
-        f"enabled={roi['enabled']}, x={roi['x']}, y={roi['y']}, w={roi['w']}, h={roi['h']}"
-    )
-    return jsonify({"ok": True, "target": target, "roi": roi, "rois": state.snapshot()["rois"]})
-
-
 @app.route("/api/logs/clear", methods=["POST"])
 def api_clear_logs():
     state.clear_logs()
@@ -966,25 +843,44 @@ def api_clear_logs():
     return build_state_response({"ok": True})
 
 
+@app.route("/api/client-result", methods=["POST"])
+def api_client_result():
+    payload = request.get_json(force=True, silent=True) or {}
+    result_text = (payload.get("result_text") or "").strip()
+    status = (payload.get("status") or "idle").strip().lower()
+    error_text = (payload.get("error") or "").strip()
+
+    if status not in {"idle", "processing", "pass", "fail"}:
+        return jsonify({"ok": False, "error": "未知状态。"}), 400
+    if not result_text:
+        return jsonify({"ok": False, "error": "结果文本不能为空。"}), 400
+
+    state.set_result(result_text)
+    state.mark_result_status(status, error_text or None)
+    return build_state_response({"ok": True})
+
+
 @app.route("/api/detect", methods=["POST"])
 def api_detect():
     payload = request.get_json(force=True, silent=True) or {}
     sn = (payload.get("sn") or "").strip()
-    manual_sn_enabled = bool(payload.get("manual_sn_enabled"))
     vendor = normalize_manual_fragment(payload.get("vendor") or "")
     model = normalize_manual_fragment(payload.get("model") or "")
     work_order_number = (payload.get("work_order_number") or "").strip()
-    force_upload = bool(payload.get("force_upload"))
     cpu_model = DEFAULT_CPU_MODEL
 
     if not work_order_number:
         return jsonify({"ok": False, "error": "工单号不能为空。"}), 400
-    if manual_sn_enabled and not sn:
+    if not sn:
         return jsonify({"ok": False, "error": "SN不能为空。"}), 400
     if not vendor:
         return jsonify({"ok": False, "error": "前三码不能为空。"}), 400
     if not model:
         return jsonify({"ok": False, "error": "后四码不能为空。"}), 400
+    if len(vendor) != 3:
+        return jsonify({"ok": False, "error": "前三码必须为 3 位。"}), 400
+    if len(model) != 4:
+        return jsonify({"ok": False, "error": "后四码必须为 4 位。"}), 400
 
     snapshot = state.snapshot()
     if snapshot["detecting"]:
@@ -999,27 +895,30 @@ def api_detect():
     try:
         detection = perform_detection(
             sn,
-            manual_sn_enabled,
             vendor,
             model,
             work_order_number,
             cpu_model,
-            force_upload=force_upload,
         )
         response_payload = {"ok": True, "sn": detection["sn"]}
-    except DuplicateSNError as exc:
-        state.mark_result_status("pass", str(exc))
-        state.set_result(f"PASS\n等待下一个设备\nSN: {state.snapshot().get('last_seen_sn') or ''}")
-        state.append_log(str(exc))
-        response_payload = {"ok": False, "error": str(exc), "sn": state.snapshot().get("last_seen_sn") or ""}
-        response_status = 409
     except RuntimeError as exc:
-        if state.snapshot().get("last_result_status") == "processing":
+        snapshot = state.snapshot()
+        if snapshot.get("last_result_status") == "pass" and "已经 PASS" in str(exc):
+            state.set_result(build_pass_result_text(snapshot.get('last_seen_sn') or ""))
+            state.append_log(str(exc))
+            response_payload = {"ok": False, "error": str(exc), "sn": snapshot.get("last_seen_sn") or ""}
+            response_status = 409
+        elif snapshot.get("last_result_status") == "processing":
             state.mark_result_status("fail", str(exc))
-        state.set_result(f"FAIL\n{exc}")
-        state.append_log(str(exc))
-        response_payload = {"ok": False, "error": str(exc), "sn": state.snapshot().get("last_seen_sn") or sn}
-        response_status = 500
+            state.set_result(f"FAIL\n{exc}")
+            state.append_log(str(exc))
+            response_payload = {"ok": False, "error": str(exc), "sn": snapshot.get("last_seen_sn") or sn}
+            response_status = 500
+        else:
+            state.set_result(f"FAIL\n{exc}")
+            state.append_log(str(exc))
+            response_payload = {"ok": False, "error": str(exc), "sn": snapshot.get("last_seen_sn") or sn}
+            response_status = 500
     except Exception as exc:
         if state.snapshot().get("last_result_status") == "processing":
             state.mark_result_status("fail", str(exc))
@@ -1086,9 +985,7 @@ def main():
     except OSError as exc:
         raise RuntimeError("OCR Web 服务已经在运行。") from exc
 
-    state.rois = load_saved_rois()
     state.append_log("OCR Web 服务启动。")
-    state.append_log("已加载保存的 ROI 配置。")
     refresh_devices()
     app.config["LOCK_FILE"] = lock_file
     app.run(host=APP_HOST, port=APP_PORT, debug=False, threaded=True)
