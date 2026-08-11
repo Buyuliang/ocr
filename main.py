@@ -29,11 +29,9 @@ os.makedirs(SAVE_DIR, exist_ok=True)
 OCR_DEMO = "./rknn_ppocrv5_demo"
 OCR_DET_MODEL = "model/PP-OCRv5_mobile_det.rknn"
 OCR_REC_MODEL = "model/PP-OCRv5_mobile_rec.rknn"
-LOGIN_URL = f"{API_BASE}/api/login"
 PRODUCT_URL = f"{API_BASE}/api/product"
-LOGIN_USERNAME = "mixtile"
-LOGIN_PASSWORD = "rK#nH6wea]h<PP%]_EdA"
-CPU_MODELS = ["RK3288"]
+PRODUCTION_ACCESS_TOKEN = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0b2tlbl90eXBlIjoiYWNjZXNzIiwiZXhwIjoxODE3OTY2NzI5LCJpYXQiOjE3ODY0MzA3MjksImp0aSI6IjBlMzEwYjEwNDU0ZjRlNGU5N2QxMmE3OWIxOTc1NDdjIiwidXNlcl9pZCI6MX0.MySs_M7kDw-3q_-UC9uXsiqM7R2s6x94_5iXCkGr7DI"
+CPU_MODELS = ["unknown", "RK3288", "RK3566", "RK3566-T", "RK3568", "RK3588", "RK3588S2"]
 DEFAULT_CPU_MODEL = "RK3288"
 DISPLAY_FRAME_WIDTH = 640
 DISPLAY_FRAME_HEIGHT = 480
@@ -298,8 +296,6 @@ class CameraManager:
 state = AppState()
 camera = CameraManager(state)
 app = Flask(__name__)
-auth_lock = threading.Lock()
-auth_token = None
 
 
 def build_state_response(payload=None, status=200):
@@ -422,44 +418,14 @@ def http_json_request(url, payload, headers=None):
         raise UploadError("接口返回了无法解析的 JSON。") from exc
 
 
-def login_and_get_token():
-    global auth_token
-    with auth_lock:
-        if auth_token:
-            return 0.0, auth_token
-        login_cost, response_json = http_json_request(
-            LOGIN_URL,
-            {"username": LOGIN_USERNAME, "password": LOGIN_PASSWORD},
-        )
-        token = response_json.get("access_token")
-        if not token:
-            raise UploadError("登录接口未返回 access_token。")
-        auth_token = token
-        return login_cost, token
-
-
 def upload_product(payload):
-    global auth_token
     state.append_upload_log("上传请求 JSON", payload)
     print("[UPLOAD REQUEST]", json.dumps(payload, ensure_ascii=False))
-    login_cost, token = login_and_get_token()
-    headers = {"Authorization": f"Bearer {token}"}
-    try:
-        upload_cost, response_json = http_json_request(PRODUCT_URL, payload, headers=headers)
-        state.append_upload_log("上传返回 JSON", response_json)
-        print("[UPLOAD RESPONSE]", json.dumps(response_json, ensure_ascii=False))
-        return login_cost, upload_cost, response_json
-    except UploadError as exc:
-        if "401" not in str(exc) and "UNAUTHORIZED" not in str(exc).upper():
-            raise
-    with auth_lock:
-        auth_token = None
-    login_cost, token = login_and_get_token()
-    headers = {"Authorization": f"Bearer {token}"}
+    headers = {"Authorization": f"Bearer {PRODUCTION_ACCESS_TOKEN}"}
     upload_cost, response_json = http_json_request(PRODUCT_URL, payload, headers=headers)
     state.append_upload_log("上传返回 JSON", response_json)
     print("[UPLOAD RESPONSE]", json.dumps(response_json, ensure_ascii=False))
-    return login_cost, upload_cost, response_json
+    return None, upload_cost, response_json
 
 
 def translate_points(points, offset_x, offset_y):
